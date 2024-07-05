@@ -1,0 +1,166 @@
+---
+- name: Setup Backend Application
+  hosts: all
+  become: yes
+
+  vars:
+    log_file: "/var/log/backend_setup.log"
+    db_host: "expense.db.test.ullagallu.cloud"
+    db_root_password: "ExpenseApp1"
+    repo_url: "https://github.com/srkugl/expense-backend.git"
+    app_directory: "/app"
+    node_version: "20"
+    user_name: "expense"
+
+  tasks:
+    - name: Install MySQL client
+      dnf:
+        name: mysql
+        state: present
+      register: mysql_install_result
+      ignore_errors: yes
+
+    - name: Validate MySQL client installation
+      assert:
+        that: mysql_install_result.rc == 0
+        fail_msg: "Failed to install MySQL client"
+
+    - name: Disable default NodeJS module
+      dnf:
+        name: nodejs
+        state: absent
+        module_hotfixes: yes
+        module_name: nodejs
+      register: disable_nodejs_result
+      ignore_errors: yes
+
+    - name: Validate NodeJS module disable
+      assert:
+        that: disable_nodejs_result.rc == 0
+        fail_msg: "Failed to disable default NodeJS module"
+
+    - name: Enable NodeJS 20 module
+      dnf:
+        name: nodejs
+        state: present
+        module_name: "nodejs:{{ node_version }}"
+        module_hotfixes: yes
+      register: enable_nodejs_result
+      ignore_errors: yes
+
+    - name: Validate NodeJS module enable
+      assert:
+        that: enable_nodejs_result.rc == 0
+        fail_msg: "Failed to enable NodeJS {{ node_version }} module"
+
+    - name: Install NodeJS 20
+      dnf:
+        name: nodejs
+        state: present
+      register: install_nodejs_result
+      ignore_errors: yes
+
+    - name: Validate NodeJS installation
+      assert:
+        that: install_nodejs_result.rc == 0
+        fail_msg: "Failed to install NodeJS {{ node_version }}"
+
+    - name: Ensure user 'expense' exists
+      user:
+        name: "{{ user_name }}"
+        state: present
+      register: useradd_result
+
+    - name: Validate user 'expense' creation
+      assert:
+        that: useradd_result.rc == 0
+        fail_msg: "Failed to create user 'expense'"
+
+    - name: Ensure /app directory exists
+      file:
+        path: "{{ app_directory }}"
+        state: directory
+
+    - name: Clone the repository if not already present
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_directory }}"
+        force: yes
+      register: git_clone_result
+
+    - name: Validate repository cloning
+      assert:
+        that: git_clone_result.rc == 0
+        fail_msg: "Failed to clone repository"
+
+    - name: Install application dependencies
+      npm:
+        path: "{{ app_directory }}"
+        state: present
+      register: npm_install_result
+
+    - name: Validate application dependencies installation
+      assert:
+        that: npm_install_result.rc == 0
+        fail_msg: "Failed to install application dependencies"
+
+    - name: Create backend service file
+      copy:
+        dest: /etc/systemd/system/backend.service
+        content: |
+          [Unit]
+          Description=Backend Service
+
+          [Service]
+          User={{ user_name }}
+          Environment=DB_HOST="{{ db_host }}"
+          ExecStart=/bin/node {{ app_directory }}/index.js
+          SyslogIdentifier=backend
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload
+      register: systemd_reload_result
+
+    - name: Validate systemd daemon reload
+      assert:
+        that: systemd_reload_result.rc == 0
+        fail_msg: "Failed to reload systemd daemon"
+
+    - name: Start backend service
+      service:
+        name: backend
+        state: started
+
+    - name: Enable backend service
+      service:
+        name: backend
+        enabled: yes
+
+    - name: Load database schema
+      mysql_db:
+        name: backend
+        state: import
+        target: "{{ app_directory }}/schema/backend.sql"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        login_host: "{{ db_host }}"
+      register: db_import_result
+
+    - name: Validate database schema load
+      assert:
+        that: db_import_result.rc == 0
+        fail_msg: "Failed to load database schema"
+
+    - name: Restart backend service
+      service:
+        name: backend
+        state: restarted
+      register: backend_restart_result
+
+    - name: Validate backend service restart
+      assert:
+        that: backend_restart_result.rc == 0
+        fail_msg: "Failed to restart backend service"

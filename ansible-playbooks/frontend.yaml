@@ -1,0 +1,124 @@
+---
+- name: Setup Frontend Application with Nginx
+  hosts: all
+  become: yes
+
+  vars:
+    log_file: "/var/log/nginx_frontend_setup.log"
+    nginx_root: "/usr/share/nginx/html"
+    nginx_config: "/etc/nginx/default.d/expense.conf"
+    frontend_repo_url: "https://github.com/ullagallu123/expense-frontend.git"
+    backend_proxy_host: "expense.backend.test.ullagallu.cloud"
+    backend_proxy_port: "8080"
+
+  tasks:
+    - name: Install Nginx
+      dnf:
+        name: nginx
+        state: present
+      register: nginx_install_result
+      ignore_errors: yes
+
+    - name: Validate Nginx installation
+      assert:
+        that: nginx_install_result.rc == 0
+        fail_msg: "Failed to install Nginx"
+
+    - name: Enable and start Nginx
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+      register: nginx_start_result
+
+    - name: Validate Nginx service start
+      assert:
+        that: nginx_start_result.rc == 0
+        fail_msg: "Failed to start Nginx"
+
+    - name: Remove default Nginx content
+      file:
+        path: "{{ nginx_root }}"
+        state: absent
+      register: remove_default_content_result
+      ignore_errors: yes
+
+    - name: Validate removal of default Nginx content
+      assert:
+        that: remove_default_content_result.rc in [0, 2]
+        fail_msg: "Failed to remove default Nginx content"
+
+    - name: Clone frontend repository if not already present
+      git:
+        repo: "{{ frontend_repo_url }}"
+        dest: "{{ nginx_root }}"
+        force: yes
+      register: git_clone_result
+
+    - name: Validate repository cloning
+      assert:
+        that: git_clone_result.rc == 0
+        fail_msg: "Failed to clone frontend repository"
+
+    - name: Create Nginx configuration for frontend
+      copy:
+        dest: "{{ nginx_config }}"
+        content: |
+          events {}
+
+          http {
+              include /etc/nginx/mime.types;
+              default_type application/octet-stream;
+
+              log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                              '$status $body_bytes_sent "$http_referer" '
+                              '"$http_user_agent" "$http_x_forwarded_for"';
+
+              access_log /var/log/nginx/access.log main;
+              error_log /var/log/nginx/error.log;
+
+              server {
+                  listen 80 default_server;
+                  server_name localhost;
+
+                  root /usr/share/nginx/html;
+                  index index.html;
+
+                  location / {
+                      try_files $uri $uri/ =404;
+                  }
+
+                  location /api/ {
+                      proxy_pass http://{{ backend_proxy_host }}:{{ backend_proxy_port }}/;  # Adjust port if necessary
+                      proxy_http_version 1.1;
+                      proxy_set_header Host $host;
+                      proxy_set_header X-Real-IP $remote_addr;
+                      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                      proxy_set_header X-Forwarded-Proto $scheme;
+                  }
+
+                  location /health {
+                      stub_status on;
+                      access_log off;
+                  }
+
+                  # Additional location blocks or configurations can go here
+              }
+          }
+      register: nginx_config_result
+
+    - name: Validate Nginx configuration creation
+      assert:
+        that: nginx_config_result.rc == 0
+        fail_msg: "Failed to create Nginx configuration"
+
+    - name: Restart Nginx to apply changes
+      systemd:
+        name: nginx
+        state: restarted
+      register: nginx_restart_result
+
+    - name: Validate Nginx restart
+      assert:
+        that: nginx_restart_result.rc == 0
+        fail_msg: "Failed to restart Nginx"
