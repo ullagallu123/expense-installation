@@ -7,7 +7,7 @@
     log_file: "/var/log/backend_setup.log"
     db_host: "expense.db.test.ullagallu.cloud"
     db_root_password: "ExpenseApp1"
-    repo_url: "https://github.com/srkugl/expense-backend.git"
+    repo_url: "https://github.com/ullagallu123/expense-backend.git"
     app_directory: "/app"
     node_version: "20"
     user_name: "expense"
